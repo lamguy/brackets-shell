@@ -17,6 +17,8 @@
 #include "config.h"
 #include "appshell_extensions.h"
 #include "command_callbacks.h"
+#include "client_switches.h"
+#include "native_menu_model.h"
 
 // Application startup time
 CFTimeInterval g_appStartupTime;
@@ -73,6 +75,8 @@ static NSAutoreleasePool* g_autopool = nil;
   BOOL isReallyClosing;
 }
 - (void)setIsReallyClosing;
+- (IBAction)handleMenuAction:(id)sender;
+- (BOOL)validateMenuItem:(NSMenuItem *)menuItem;
 - (IBAction)showAbout:(id)sender;
 - (IBAction)quit:(id)sender;
 #ifdef SHOW_TOOLBAR_UI
@@ -103,6 +107,27 @@ static NSAutoreleasePool* g_autopool = nil;
 - (IBAction)showAbout:(id)sender {
   if (g_handler.get() && g_handler->GetBrowserId())
     g_handler->SendJSCommand(g_handler->GetBrowser(), HELP_ABOUT);
+}
+
+- (IBAction)handleMenuAction:(id)sender {
+    if (g_handler.get() && g_handler->GetBrowserId()) {
+        NSMenuItem* senderItem = sender;
+        NSUInteger tag = [senderItem tag];
+        ExtensionString commandId = NativeMenuModel::getInstance(getMenuParent(g_handler->GetBrowser())).getCommandId(tag);
+        CefRefPtr<CommandCallback> callback = new EditCommandCallback(g_handler->GetBrowser(), commandId);
+        g_handler->SendJSCommand(g_handler->GetBrowser(), commandId, callback);
+    }
+}
+
+- (BOOL)validateMenuItem:(NSMenuItem *)menuItem {
+    NSInteger menuState = NSOffState;
+    NSUInteger tag = [menuItem tag];
+    NativeMenuModel menus = NativeMenuModel::getInstance(getMenuParent(g_handler->GetBrowser()));
+    if (menus.isMenuItemChecked(tag)) {
+        menuState = NSOnState;
+    }
+    [menuItem setState:menuState];
+    return menus.isMenuItemEnabled(tag);
 }
 
 - (IBAction)quit:(id)sender {
@@ -159,15 +184,17 @@ static NSAutoreleasePool* g_autopool = nil;
                                    defaultButton:@"OK"
                                  alternateButton:nil
                                      otherButton:nil
-                       informativeTextWithFormat:message];
+                       informativeTextWithFormat:@"%@", message];
   [alert runModal];
 }
 
 - (void)notifyConsoleMessage:(id)object {
+  /*
   std::stringstream ss;
   ss << "Console messages will be written to " << g_handler->GetLogFile();
   NSString* str = [NSString stringWithUTF8String:(ss.str().c_str())];
   [self alert:@"Console Messages" withMessage:str];
+  */
 }
 
 - (void)notifyDownloadComplete:(id)object {
@@ -275,18 +302,55 @@ NSButton* MakeButton(NSRect* rect, NSString* title, NSView* parent) {
   ClientWindowDelegate* delegate = [[ClientWindowDelegate alloc] init];
   
   // Create the main application window.
+  NSUInteger styleMask = (NSTitledWindowMask |
+                          NSClosableWindowMask |
+                          NSMiniaturizableWindowMask |
+                          NSResizableWindowMask );
+
+  // Get the available screen space
   NSRect screen_rect = [[NSScreen mainScreen] visibleFrame];
-  NSRect window_rect = { {0, screen_rect.size.height - kWindowHeight},
-    {kWindowWidth, kWindowHeight} };
+  // Start out with the content being as big as possible
+  NSRect content_rect = [NSWindow contentRectForFrameRect:screen_rect styleMask:styleMask];
+  
+  // Determine the maximum height
+  const int maxHeight = kWindowHeight
+  #ifdef SHOW_TOOLBAR_UI
+    + URLBAR_HEIGHT
+  #endif
+  ;
+  // Make the content rect fit into maxHeight and kWindowWidth
+  if (content_rect.size.height > maxHeight) {
+    // First move the window up as much as we reduce it's height so it opens in the top left corner
+    content_rect.origin.y += content_rect.size.height - maxHeight;
+    content_rect.size.height = maxHeight;
+  }
+  if (content_rect.size.width > kWindowWidth) {
+    content_rect.size.width = kWindowWidth;
+  }
+
+  // Initialize the window with the adjusted default size
   NSWindow* mainWnd = [[UnderlayOpenGLHostingWindow alloc]
-                       initWithContentRect:window_rect
-                       styleMask:(NSTitledWindowMask |
-                                  NSClosableWindowMask |
-                                  NSMiniaturizableWindowMask |
-                                  NSResizableWindowMask )
+                       initWithContentRect:content_rect
+                       styleMask:styleMask
                        backing:NSBackingStoreBuffered
                        defer:NO];
-  [mainWnd setTitle:APP_NAME];
+
+  // "Preclude the window controller from changing a window’s position from the
+  // one saved in the defaults system" (NSWindow Class Reference)
+  [[mainWnd windowController] setShouldCascadeWindows: NO];
+  
+  // Set the "autosave" name for the window. If there is a previously stored
+  // size for the window, it will be loaded here and used to resize the window.
+  // It appears that if the stored size is too big for the screen,
+  // it is automatically adjusted to fit.
+  [mainWnd setFrameAutosaveName:APP_NAME @"MainWindow"];
+  
+  // Get the actual content size of the window since setFrameAutosaveName could
+  // result in the window size changing.
+  content_rect = [mainWnd contentRectForFrameRect:[mainWnd frame]];
+
+  // Configure the rest of the window
+  [mainWnd setTitle:WINDOW_TITLE];
   [mainWnd setDelegate:delegate];
   [mainWnd setCollectionBehavior: (1 << 7) /* NSWindowCollectionBehaviorFullScreenPrimary */];
 
@@ -301,7 +365,7 @@ NSButton* MakeButton(NSRect* rect, NSString* title, NSView* parent) {
 #ifdef SHOW_TOOLBAR_UI
   // Create the buttons.
   NSRect button_rect = [contentView bounds];
-  button_rect.origin.y = window_rect.size.height - URLBAR_HEIGHT +
+  button_rect.origin.y = content_rect.size.height - URLBAR_HEIGHT +
       (URLBAR_HEIGHT - BUTTON_HEIGHT) / 2;
   button_rect.size.height = BUTTON_HEIGHT;
   button_rect.origin.x += BUTTON_MARGIN;
@@ -353,23 +417,15 @@ NSButton* MakeButton(NSRect* rect, NSString* title, NSView* parent) {
 
   settings.web_security_disabled = true;
 
-  window_info.SetAsChild(contentView, 0, 0, kWindowWidth, kWindowHeight);
+  window_info.SetAsChild(contentView, 0, 0, content_rect.size.width, content_rect.size.height);
+  
+  NSString* str = [[startupUrl absoluteString] stringByReplacingPercentEscapesUsingEncoding:NSUTF8StringEncoding];
   CefBrowserHost::CreateBrowser(window_info, g_handler.get(),
-                                [[startupUrl absoluteString] UTF8String], settings);
+                                [str UTF8String], settings);
   
   // Show the window.
+  [mainWnd display];
   [mainWnd makeKeyAndOrderFront: nil];
-
-  // Size the window.
-  NSRect r = [mainWnd contentRectForFrameRect:[mainWnd frame]];
-  r.size.width = kWindowWidth;
-  r.size.height = kWindowHeight
-#ifdef SHOW_TOOLBAR_UI
-	+ URLBAR_HEIGHT
-#endif
-	;
-	
-  [mainWnd setFrame:[mainWnd frameRectForContentRect:r] display:YES];
 }
 
 // Sent by the default notification center immediately before the application
@@ -391,6 +447,15 @@ NSButton* MakeButton(NSRect* rect, NSString* title, NSView* parent) {
 
 -(BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)theApplication {
     return YES;
+}
+
+- (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)theApplication {
+    if (!g_isTerminating && g_handler.get() && !g_handler->AppIsQuitting() && g_handler->HasWindows()) {
+        g_handler->DispatchCloseToNextBrowser();
+        return NSTerminateCancel;
+    }
+    g_isTerminating = true;
+    return NSTerminateNow;
 }
 
 @end
@@ -441,23 +506,32 @@ int main(int argc, char* argv[]) {
   CGEventRef event = CGEventCreate(NULL);
   CGEventFlags modifiers = CGEventGetFlags(event);
   CFRelease(event);
-    
-  // If the shift key is not pressed, look for index.html bundled in the app package
-  if ((modifiers & kCGEventFlagMaskShift) != kCGEventFlagMaskShift) {
-    NSString* bundlePath = [[NSBundle mainBundle] bundlePath];
-    
-    // First, look in our app package for /Contents/dev/src/index.html
-    NSString* devFile = [bundlePath stringByAppendingString:@"/Contents/dev/src/index.html"];
-    
-    if ([[NSFileManager defaultManager] fileExistsAtPath:devFile]) {
-      startupUrl = [NSURL fileURLWithPath:devFile];
-    }
-    
-    if (startupUrl == nil) {
-      // If the dev file wasn't found, look for /Contents/www/index.html
-      NSString* indexFile = [bundlePath stringByAppendingString:@"/Contents/www/index.html"];
-      if ([[NSFileManager defaultManager] fileExistsAtPath:indexFile]) {
-        startupUrl = [NSURL fileURLWithPath:indexFile];
+  
+  CefRefPtr<CefCommandLine> cmdLine = AppGetCommandLine();
+  if (cmdLine->HasSwitch(cefclient::kStartupPath)) {
+    CefString cmdLineStartupURL = cmdLine->GetSwitchValue(cefclient::kStartupPath);
+    std::string startupURLStr(cmdLineStartupURL);
+    NSString* str = [NSString stringWithUTF8String:startupURLStr.c_str()];
+    startupUrl = [NSURL fileURLWithPath:[str stringByExpandingTildeInPath]];
+  }
+  else {
+    // If the shift key is not pressed, look for index.html bundled in the app package
+    if ((modifiers & kCGEventFlagMaskShift) != kCGEventFlagMaskShift) {
+      NSString* bundlePath = [[NSBundle mainBundle] bundlePath];
+      
+      // First, look in our app package for /Contents/dev/src/index.html
+      NSString* devFile = [bundlePath stringByAppendingString:@"/Contents/dev/src/index.html"];
+      
+      if ([[NSFileManager defaultManager] fileExistsAtPath:devFile]) {
+        startupUrl = [NSURL fileURLWithPath:devFile];
+      }
+      
+      if (startupUrl == nil) {
+        // If the dev file wasn't found, look for /Contents/www/index.html
+        NSString* indexFile = [bundlePath stringByAppendingString:@"/Contents/www/index.html"];
+        if ([[NSFileManager defaultManager] fileExistsAtPath:indexFile]) {
+          startupUrl = [NSURL fileURLWithPath:indexFile];
+        }
       }
     }
   }
@@ -476,7 +550,7 @@ int main(int argc, char* argv[]) {
       return 0;
     }
   }
-    
+  
   // Create the application delegate and window.
   NSObject* delegate = [[ClientAppDelegate alloc] init];
   [delegate performSelectorOnMainThread:@selector(createApp:) withObject:nil
@@ -504,10 +578,20 @@ std::string AppGetWorkingDirectory() {
 }
 
 CefString AppGetCachePath() {
-  // Set persistence cache
-  NSString *libraryDirectory = [NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES) objectAtIndex:0];
-  NSString *cefCacheDirectory = [NSString stringWithFormat:@"%@/%@%@/cef_data", libraryDirectory, GROUP_NAME, APP_NAME];
-  CefString cachePath = [cefCacheDirectory UTF8String];
+  std::string cachePath = std::string(ClientApp::AppGetSupportDirectory()) + "/cef_data";
   
-  return cachePath;
+  return CefString(cachePath);
+}
+
+CefString AppGetProductVersionString() {
+  NSMutableString *s = [NSMutableString stringWithString:APP_NAME];
+  [s replaceOccurrencesOfString:@" "
+                     withString:@""
+                        options:NSLiteralSearch
+                          range:NSMakeRange(0, [s length])];
+  [s appendString:@"/"];
+  [s appendString:(NSString*)[[NSBundle mainBundle]
+                              objectForInfoDictionaryKey:(NSString *)kCFBundleVersionKey]];
+  CefString result = CefString([s UTF8String]);
+  return result;
 }

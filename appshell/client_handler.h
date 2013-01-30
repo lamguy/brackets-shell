@@ -23,6 +23,7 @@ class ClientHandler : public CefClient,
                       public CefLoadHandler,
                       public CefRequestHandler,
                       public CefDisplayHandler,
+                      public CefKeyboardHandler,
                       public CefGeolocationHandler,
                       public CefContextMenuHandler {
  public:
@@ -90,6 +91,10 @@ class ClientHandler : public CefClient,
                                         CefRefPtr<CefProcessMessage> message)
                                         OVERRIDE;
 
+  virtual CefRefPtr<CefKeyboardHandler> GetKeyboardHandler() OVERRIDE {
+    return this;
+  } 
+
   // CefLifeSpanHandler methods
   virtual bool OnBeforePopup(CefRefPtr<CefBrowser> parentBrowser,
                              const CefPopupFeatures& popupFeatures,
@@ -152,6 +157,16 @@ class ClientHandler : public CefClient,
                                     int command_id,
                                     EventFlags event_flags) OVERRIDE;
 
+  // CefKeyboardHandler methods
+  virtual bool OnPreKeyEvent(CefRefPtr<CefBrowser> browser,
+                                    const CefKeyEvent& event,
+                                    CefEventHandle os_event,
+                                    bool* is_keyboard_shortcut) OVERRIDE;
+
+  virtual bool OnKeyEvent(CefRefPtr<CefBrowser> browser,
+                                    const CefKeyEvent& event,
+                                    CefEventHandle os_event) OVERRIDE;
+
   void SetMainHwnd(CefWindowHandle hwnd);
   CefWindowHandle GetMainHwnd() { return m_MainHwnd; }
   void SetEditHwnd(CefWindowHandle hwnd);
@@ -191,6 +206,7 @@ class ClientHandler : public CefClient,
 
   void QuittingApp(bool quitting) { m_quitting = quitting; }
   bool AppIsQuitting() { return m_quitting; }
+  bool HasWindows() const { return !browser_window_map_.empty(); }
 
  protected:
   void SetLoading(bool isLoading);

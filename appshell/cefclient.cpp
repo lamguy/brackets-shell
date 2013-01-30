@@ -17,19 +17,7 @@
 #include "client_switches.h"
 #include "string_util.h"
 #include "util.h"
-
-namespace {
-
-// Return the int representation of the specified string.
-int GetIntValue(const CefString& str) {
-  if (str.empty())
-    return 0;
-
-  std::string stdStr = str;
-  return atoi(stdStr.c_str());
-}
-
-}  // namespace
+#include "config.h"
 
 CefRefPtr<ClientHandler> g_handler;
 CefRefPtr<CefCommandLine> g_command_line;
@@ -101,28 +89,31 @@ void AppGetSettings(CefSettings& settings, CefRefPtr<ClientApp> app) {
     }
   }
 
-  CefString(&settings.locale) = app->GetCurrentLanguage();
+  // Don't update the settings.locale with the locale that we detected from the OS.
+  // Otherwise, CEF will use it to find the resources and when it fails in finding resources
+  // for some locales that are not available in resources, it crashes.
+  //CefString(&settings.locale) = app->GetCurrentLanguage( );
 
   CefString(&settings.javascript_flags) =
       g_command_line->GetSwitchValue(cefclient::kJavascriptFlags);
 
   // Retrieve command-line proxy configuration, if any.
   bool has_proxy = false;
-  cef_proxy_type_t proxy_type = PROXY_TYPE_DIRECT;
+  cef_proxy_type_t proxy_type = CEF_PROXY_TYPE_DIRECT;
   CefString proxy_config;
 
   if (g_command_line->HasSwitch(cefclient::kProxyType)) {
     std::string str = g_command_line->GetSwitchValue(cefclient::kProxyType);
     if (str == cefclient::kProxyType_Direct) {
       has_proxy = true;
-      proxy_type = PROXY_TYPE_DIRECT;
+      proxy_type = CEF_PROXY_TYPE_DIRECT;
     } else if (str == cefclient::kProxyType_Named ||
                str == cefclient::kProxyType_Pac) {
       proxy_config = g_command_line->GetSwitchValue(cefclient::kProxyConfig);
       if (!proxy_config.empty()) {
         has_proxy = true;
         proxy_type = (str == cefclient::kProxyType_Named?
-                      PROXY_TYPE_NAMED:PROXY_TYPE_PAC_STRING);
+                      CEF_PROXY_TYPE_NAMED:CEF_PROXY_TYPE_PAC_STRING);
       }
     }
   }
@@ -133,7 +124,11 @@ void AppGetSettings(CefSettings& settings, CefRefPtr<ClientApp> app) {
   }
     
   // Enable dev tools
-  settings.remote_debugging_port = 9234;
+  settings.remote_debugging_port = REMOTE_DEBUGGING_PORT;
+  
+  // Set product version, which gets added to the User Agent string
+  CefString(&settings.product_version) = AppGetProductVersionString();
+
 }
 
 // Returns the application browser settings based on command line arguments.

@@ -3,6 +3,11 @@
 xcodebuild
 xcodebuild/*
 
+appshell.xcodeproj
+Brackets.vcxproj
+appshell.sln
+libcef_dll_wrapper.vcxproj
+
 *.pbxuser
 *.perspective
 *.perspective3
@@ -15,6 +20,7 @@ xcodebuild/*
 *.sdf
 *.opensdf
 *.suo
+*.vcxproj.filters
 *.vcxproj.user
 *.log
 *.dmg

@@ -5,7 +5,6 @@
 #include "cefclient.h"
 #include <windows.h>
 #include <commdlg.h>
-#include <shellapi.h>
 #include <direct.h>
 #include <MMSystem.h>
 #include <sstream>
@@ -18,6 +17,8 @@
 #include "config.h"
 #include "resource.h"
 #include "string_util.h"
+#include "client_switches.h"
+#include "native_menu_model.h"
 
 #include <ShlObj.h>
 
@@ -34,6 +35,8 @@
 // Global Variables:
 DWORD g_appStartupTime;
 HINSTANCE hInst;   // current instance
+HACCEL hAccelTable;
+HWND hWndMain;
 TCHAR szTitle[MAX_LOADSTRING];  // The title bar text
 TCHAR szWindowClass[MAX_LOADSTRING];  // the main window class name
 char szWorkingDir[MAX_PATH];  // The current working directory
@@ -54,6 +57,30 @@ extern CefRefPtr<ClientHandler> g_handler;
 // support the default tooltip implementation.
 #pragma comment(linker, "/manifestdependency:\"type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")  // NOLINT(whitespace/line_length)
 #endif
+
+// Registry access functions
+void EnsureTrailingSeparator(LPWSTR pRet);
+void GetKey(LPCWSTR pBase, LPCWSTR pGroup, LPCWSTR pApp, LPCWSTR pFolder, LPWSTR pRet);
+bool GetRegistryInt(LPCWSTR pFolder, LPCWSTR pEntry, int* pDefault, int& ret);
+bool WriteRegistryInt (LPCWSTR pFolder, LPCWSTR pEntry, int val);
+
+// Registry key strings
+#define PREF_APPSHELL_BASE		L"Software"
+#define PREF_WINPOS_FOLDER		L"Window Position"
+#define PREF_LEFT				L"Left"
+#define PREF_TOP				L"Top"
+#define PREF_WIDTH				L"Width"
+#define PREF_HEIGHT				L"Height"
+#define PREF_RESTORE_LEFT		L"Restore Left"
+#define PREF_RESTORE_TOP		L"Restore Top"
+#define PREF_RESTORE_RIGHT		L"Restore Right"
+#define PREF_RESTORE_BOTTOM		L"Restore Bottom"
+#define PREF_SHOWSTATE			L"Show State"
+
+// Window state functions
+void SaveWindowRect(HWND hWnd);
+void RestoreWindowRect(int& left, int& top, int& width, int& height, int& showCmd);
+void RestoreWindowPlacement(HWND hWnd, int showCmd);
 
 // Program entry point function.
 int APIENTRY wWinMain(HINSTANCE hInstance,
@@ -93,41 +120,44 @@ int APIENTRY wWinMain(HINSTANCE hInstance,
   // Initialize CEF.
   CefInitialize(main_args, settings, app.get());
 
-  HACCEL hAccelTable;
-
   // Initialize global strings
   LoadString(hInstance, IDS_APP_TITLE, szTitle, MAX_LOADSTRING);
   LoadString(hInstance, IDC_CEFCLIENT, szWindowClass, MAX_LOADSTRING);
-  MyRegisterClass(hInstance, settings.locale);
+  MyRegisterClass(hInstance, *(app->GetCurrentLanguage().GetStruct()));
  
+  CefRefPtr<CefCommandLine> cmdLine = AppGetCommandLine();
+  if (cmdLine->HasSwitch(cefclient::kStartupPath)) {
+	  wcscpy(szInitialUrl, cmdLine->GetSwitchValue(cefclient::kStartupPath).c_str());
+  }
+  else {
+	// If the shift key is not pressed, look for the index.html file 
+	if (GetAsyncKeyState(VK_SHIFT) == 0) {
+	// Get the full pathname for the app. We look for the index.html
+	// file relative to this location.
+	wchar_t appPath[MAX_PATH];
+	wchar_t *pathRoot;
+	GetModuleFileName(NULL, appPath, MAX_PATH);
 
-  // If the shift key is not pressed, look for the index.html file 
-  if (GetAsyncKeyState(VK_SHIFT) == 0) {
-    // Get the full pathname for the app. We look for the index.html
-    // file relative to this location.
-    wchar_t appPath[MAX_PATH];
-    wchar_t *pathRoot;
-    GetModuleFileName(NULL, appPath, MAX_PATH);
+	// Strip the .exe filename (and preceding "\") from the appPath
+	// and store in pathRoot
+	pathRoot = wcsrchr(appPath, '\\');
 
-    // Strip the .exe filename (and preceding "\") from the appPath
-    // and store in pathRoot
-    pathRoot = wcsrchr(appPath, '\\');
+	// Look for .\dev\src\index.html first
+	wcscpy(pathRoot, L"\\dev\\src\\index.html");
 
-    // Look for .\dev\src\index.html first
-    wcscpy(pathRoot, L"\\dev\\src\\index.html");
+	// If the file exists, use it
+	if (GetFileAttributes(appPath) != INVALID_FILE_ATTRIBUTES) {
+		wcscpy(szInitialUrl, appPath);
+	}
 
-    // If the file exists, use it
-    if (GetFileAttributes(appPath) != INVALID_FILE_ATTRIBUTES) {
-      wcscpy(szInitialUrl, appPath);
-    }
-
-    if (!wcslen(szInitialUrl)) {
-      // Look for .\www\index.html next
-      wcscpy(pathRoot, L"\\www\\index.html");
-      if (GetFileAttributes(appPath) != INVALID_FILE_ATTRIBUTES) {
-        wcscpy(szInitialUrl, appPath);
-      }
-    }
+	if (!wcslen(szInitialUrl)) {
+		// Look for .\www\index.html next
+		wcscpy(pathRoot, L"\\www\\index.html");
+		if (GetFileAttributes(appPath) != INVALID_FILE_ATTRIBUTES) {
+		wcscpy(szInitialUrl, appPath);
+		}
+	}
+	}
   }
 
   if (!wcslen(szInitialUrl)) {
@@ -151,16 +181,6 @@ int APIENTRY wWinMain(HINSTANCE hInstance,
   // Perform application initialization
   if (!InitInstance (hInstance, nCmdShow))
     return FALSE;
-
-  // Temporary localization hack. Default to English. Check for French.
-  DWORD menuId = IDC_CEFCLIENT;
-  if (settings.locale.str && (settings.locale.length > 0) &&
-      (CefString(settings.locale.str) == CefString("fr-FR")))
-  {
-	  menuId = IDC_CEFCLIENT_FR;
-  }
-
-  hAccelTable = LoadAccelerators(hInstance, MAKEINTRESOURCE(menuId));
 
   int result = 0;
 
@@ -190,6 +210,250 @@ int APIENTRY wWinMain(HINSTANCE hInstance,
   return result;
 }
 
+// Add trailing separator, if necessary
+void EnsureTrailingSeparator(LPWSTR pRet)
+{
+	if (!pRet)
+		return;
+
+	int len = wcslen(pRet);
+	if (len > 0 && wcscmp(&(pRet[len-1]), L"\\") != 0)
+	{
+		wcscat(pRet, L"\\");
+	}
+}
+
+// Helper method to build Registry Key string
+void GetKey(LPCWSTR pBase, LPCWSTR pGroup, LPCWSTR pApp, LPCWSTR pFolder, LPWSTR pRet)
+{
+	// Check for required params
+	ASSERT(pBase && pApp && pRet);
+	if (!pBase || !pApp || !pRet)
+		return;
+
+	// Base
+	wcscpy(pRet, pBase);
+
+	// Group (optional)
+	if (pGroup && (pGroup[0] != '\0'))
+	{
+		EnsureTrailingSeparator(pRet);
+		wcscat(pRet, pGroup);
+	}
+
+	// App name
+	EnsureTrailingSeparator(pRet);
+	wcscat(pRet, pApp);
+
+	// Folder (optional)
+	if (pFolder && (pFolder[0] != '\0'))
+	{
+		EnsureTrailingSeparator(pRet);
+		wcscat(pRet, pFolder);
+	}
+}
+
+// get integer value from registry key
+// caller can either use return value to determine success/fail, or pass a default to be used on fail
+bool GetRegistryInt(LPCWSTR pFolder, LPCWSTR pEntry, int* pDefault, int& ret)
+{
+	HKEY hKey;
+	bool result = false;
+
+	wchar_t key[MAX_PATH];
+	key[0] = '\0';
+	GetKey(PREF_APPSHELL_BASE, GROUP_NAME, APP_NAME, pFolder, (LPWSTR)&key);
+
+	if (ERROR_SUCCESS == RegOpenKeyEx(HKEY_CURRENT_USER, (LPCWSTR)key, 0, KEY_READ, &hKey))
+	{
+		DWORD dwValue = 0;
+		DWORD dwType = 0;
+		DWORD dwCount = sizeof(DWORD);
+		if (ERROR_SUCCESS == RegQueryValueEx(hKey, pEntry, NULL, &dwType, (LPBYTE)&dwValue, &dwCount))
+		{
+			result = true;
+			ASSERT(dwType == REG_DWORD);
+			ASSERT(dwCount == sizeof(dwValue));
+			ret = (int)dwValue;
+		}
+		RegCloseKey(hKey);
+	}
+
+	if (!result)
+	{
+		// couldn't read value, so use default, if specified
+		if (pDefault)
+			ret = *pDefault;
+	}
+
+	return result;
+}
+
+// write integer value to registry key
+bool WriteRegistryInt(LPCWSTR pFolder, LPCWSTR pEntry, int val)
+{
+	HKEY hKey;
+	bool result = false;
+
+	wchar_t key[MAX_PATH];
+	key[0] = '\0';
+	GetKey(PREF_APPSHELL_BASE, GROUP_NAME, APP_NAME, pFolder, (LPWSTR)&key);
+
+	if (ERROR_SUCCESS == RegCreateKeyEx(HKEY_CURRENT_USER, (LPCWSTR)key, 0, NULL, REG_OPTION_NON_VOLATILE, KEY_WRITE, NULL, &hKey, NULL))
+	{
+		DWORD dwCount = sizeof(int);
+		if (ERROR_SUCCESS == RegSetValueEx(hKey, pEntry, 0, REG_DWORD, (LPBYTE)&val, dwCount))
+			result = true;
+		RegCloseKey(hKey);
+	}
+
+	return result;
+}
+
+void SaveWindowRect(HWND hWnd)
+{
+	// Save position of active window
+	if (!hWnd)
+		return;
+
+	WINDOWPLACEMENT wp;
+	memset(&wp, 0, sizeof(WINDOWPLACEMENT));
+	wp.length = sizeof(WINDOWPLACEMENT);
+
+	if (GetWindowPlacement(hWnd, &wp))
+	{
+		// Only save window positions for "restored" and "maximized" states.
+		// If window is closed while "minimized", we don't want it to open minimized
+		// for next session, so don't update registry so it opens in previous state.
+		if (wp.showCmd == SW_SHOWNORMAL || wp.showCmd == SW_SHOW || wp.showCmd == SW_MAXIMIZE)
+		{
+			RECT rect;
+			if (GetWindowRect(hWnd, &rect))
+			{
+				WriteRegistryInt(PREF_WINPOS_FOLDER, PREF_LEFT,   rect.left);
+				WriteRegistryInt(PREF_WINPOS_FOLDER, PREF_TOP,    rect.top);
+				WriteRegistryInt(PREF_WINPOS_FOLDER, PREF_WIDTH,  rect.right - rect.left);
+				WriteRegistryInt(PREF_WINPOS_FOLDER, PREF_HEIGHT, rect.bottom - rect.top);
+			}
+
+			if (wp.showCmd == SW_MAXIMIZE)
+			{
+				// When window is maximized, we also store the "restore" size
+				WriteRegistryInt(PREF_WINPOS_FOLDER, PREF_RESTORE_LEFT,   wp.rcNormalPosition.left);
+				WriteRegistryInt(PREF_WINPOS_FOLDER, PREF_RESTORE_TOP,    wp.rcNormalPosition.top);
+				WriteRegistryInt(PREF_WINPOS_FOLDER, PREF_RESTORE_RIGHT,  wp.rcNormalPosition.right);
+				WriteRegistryInt(PREF_WINPOS_FOLDER, PREF_RESTORE_BOTTOM, wp.rcNormalPosition.bottom);
+			}
+
+			// Maximize is the only special case we handle
+			WriteRegistryInt(PREF_WINPOS_FOLDER, PREF_SHOWSTATE,
+							 (wp.showCmd == SW_MAXIMIZE) ? SW_MAXIMIZE : SW_SHOW);
+		}
+	}
+}
+
+void RestoreWindowRect(int& left, int& top, int& width, int& height, int& showCmd)
+{
+	// Start with Registry data
+	GetRegistryInt(PREF_WINPOS_FOLDER, PREF_LEFT,		NULL, left);
+	GetRegistryInt(PREF_WINPOS_FOLDER, PREF_TOP,		NULL, top);
+	GetRegistryInt(PREF_WINPOS_FOLDER, PREF_WIDTH,		NULL, width);
+	GetRegistryInt(PREF_WINPOS_FOLDER, PREF_HEIGHT,		NULL, height);
+	GetRegistryInt(PREF_WINPOS_FOLDER, PREF_SHOWSTATE,  NULL, showCmd);
+
+	// If window size has changed, we may need to alter window size
+	HMONITOR	hMonitor;
+	MONITORINFO	mi;
+	RECT		rcOrig, rcMax;
+
+	// Get the nearest monitor to the passed rect
+	rcOrig.left   = left;
+	rcOrig.top    = top;
+	rcOrig.right  = left + width;
+	rcOrig.bottom = top  + height;
+	hMonitor = MonitorFromRect(&rcOrig, MONITOR_DEFAULTTONEAREST);
+
+	// Get the monitor rect
+	mi.cbSize = sizeof(mi);
+	GetMonitorInfo(hMonitor, &mi);
+	rcMax = mi.rcMonitor;
+
+	if (showCmd == SW_MAXIMIZE)
+	{
+		// For maximized case, just use monitor dimensions
+		left   = rcMax.left;
+		top    = rcMax.top;
+		width  = rcMax.right  - rcMax.left;
+		height = rcMax.bottom - rcMax.top;
+	}
+	else
+	{
+		// For non-maximized case, adjust window to fit on screen
+
+		// make sure width fits
+		int rcMaxWidth = static_cast<int>(rcMax.right - rcMax.left);
+		if (width > rcMaxWidth)
+			width = rcMaxWidth;
+
+		// make sure left is on screen
+		if (left < rcMax.left)
+			left = static_cast<int>(rcMax.left);
+
+		// make sure right is on screen
+		if ((left + width) > rcMax.right)
+			left = static_cast<int>(rcMax.right) - width;
+
+		// make sure height fits
+		int rcMaxHeight = static_cast<int>(rcMax.bottom - rcMax.top);
+		if (height > rcMaxHeight)
+			height = rcMaxHeight;
+
+		// make sure top is on screen
+		if (top < rcMax.top)
+			top = static_cast<int>(rcMax.top);
+
+		// make sure bottom is on screen
+		if ((top + height) > rcMax.bottom)
+			top = static_cast<int>(rcMax.bottom) - height;
+	}
+}
+
+void RestoreWindowPlacement(HWND hWnd, int showCmd)
+{
+	if (!hWnd)
+		return;
+
+	// If window is maximized, set the "restore" window position
+	if (showCmd == SW_MAXIMIZE)
+	{
+		WINDOWPLACEMENT wp;
+		wp.length = sizeof(WINDOWPLACEMENT);
+
+		wp.flags	= 0;
+		wp.showCmd	= SW_MAXIMIZE;
+		wp.ptMinPosition.x	= -1;
+		wp.ptMinPosition.y	= -1;
+		wp.ptMaxPosition.x	= -1;
+		wp.ptMaxPosition.y	= -1;
+
+		wp.rcNormalPosition.left	= CW_USEDEFAULT;
+		wp.rcNormalPosition.top		= CW_USEDEFAULT;
+		wp.rcNormalPosition.right	= CW_USEDEFAULT;
+		wp.rcNormalPosition.bottom	= CW_USEDEFAULT;
+
+		GetRegistryInt(PREF_WINPOS_FOLDER, PREF_RESTORE_LEFT,	NULL, (int&)wp.rcNormalPosition.left);
+		GetRegistryInt(PREF_WINPOS_FOLDER, PREF_RESTORE_TOP,	NULL, (int&)wp.rcNormalPosition.top);
+		GetRegistryInt(PREF_WINPOS_FOLDER, PREF_RESTORE_RIGHT,	NULL, (int&)wp.rcNormalPosition.right);
+		GetRegistryInt(PREF_WINPOS_FOLDER, PREF_RESTORE_BOTTOM,	NULL, (int&)wp.rcNormalPosition.bottom);
+
+		// This returns an error code, but not sure what we could do on an error
+		SetWindowPlacement(hWnd, &wp);
+	}
+
+	ShowWindow(hWnd, showCmd);
+}
+
+
 //
 //  FUNCTION: MyRegisterClass()
 //
@@ -205,14 +469,6 @@ int APIENTRY wWinMain(HINSTANCE hInstance,
 //
 ATOM MyRegisterClass(HINSTANCE hInstance, const cef_string_t& locale) {
 
-  // Temporary localization hack. Default to English. Check for French.
-  DWORD menuId = IDC_CEFCLIENT;
-  if (locale.str && (locale.length > 0) &&
-      (CefString(locale.str) == CefString("fr-FR")))
-  {
-	  menuId = IDC_CEFCLIENT_FR;
-  }
-
   WNDCLASSEX wcex;
 
   wcex.cbSize = sizeof(WNDCLASSEX);
@@ -225,7 +481,7 @@ ATOM MyRegisterClass(HINSTANCE hInstance, const cef_string_t& locale) {
   wcex.hIcon         = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_CEFCLIENT));
   wcex.hCursor       = LoadCursor(NULL, IDC_ARROW);
   wcex.hbrBackground = (HBRUSH)(COLOR_WINDOW+1);
-  wcex.lpszMenuName  = MAKEINTRESOURCE(menuId);
+  wcex.lpszMenuName  = NULL;
   wcex.lpszClassName = szWindowClass;
   wcex.hIconSm       = LoadIcon(wcex.hInstance, MAKEINTRESOURCE(IDI_SMALL));
 
@@ -243,19 +499,29 @@ ATOM MyRegisterClass(HINSTANCE hInstance, const cef_string_t& locale) {
 //        create and display the main program window.
 //
 BOOL InitInstance(HINSTANCE hInstance, int nCmdShow) {
-  HWND hWnd;
-
   hInst = hInstance;  // Store instance handle in our global variable
 
-  hWnd = CreateWindow(szWindowClass, szTitle,
-                      WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, 0,
-                      CW_USEDEFAULT, 0, NULL, NULL, hInstance, NULL);
+  // TODO: test this cases:
+  // - window in secondary monitor when shutdown, disconnect secondary monitor, restart
 
-  if (!hWnd)
+  int left   = CW_USEDEFAULT;
+  int top    = CW_USEDEFAULT;
+  int width  = CW_USEDEFAULT;
+  int height = CW_USEDEFAULT;
+  int showCmd = SW_SHOW;
+  RestoreWindowRect(left, top, width, height, showCmd);
+
+  DWORD styles = WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN;
+  if (showCmd == SW_MAXIMIZE)
+	  styles |= WS_MAXIMIZE;
+  hWndMain = CreateWindow(szWindowClass, szTitle, styles,
+                      left, top, width, height, NULL, NULL, hInstance, NULL);
+
+  if (!hWndMain)
     return FALSE;
 
-  ShowWindow(hWnd, nCmdShow);
-  UpdateWindow(hWnd);
+  RestoreWindowPlacement(hWndMain, showCmd);
+  UpdateWindow(hWndMain);
 
   return TRUE;
 }
@@ -402,6 +668,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam,
 		}
         return 0;
       case ID_WARN_CONSOLEMESSAGE:
+/*
         if (g_handler.get()) {
           std::wstringstream ss;
           ss << L"Console messages will be written to "
@@ -409,6 +676,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam,
           MessageBox(hWnd, ss.str().c_str(), L"Console Messages",
               MB_OK | MB_ICONINFORMATION);
         }
+*/
         return 0;
       case ID_WARN_DOWNLOADCOMPLETE:
       case ID_WARN_DOWNLOADERROR:
@@ -445,6 +713,12 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam,
           browser->StopLoad();
         return 0;
 #endif // SHOW_TOOLBAR_UI
+      default:
+          ExtensionString commandId = NativeMenuModel::getInstance(getMenuParent(g_handler->GetBrowser())).getCommandId(wmId);
+          if (commandId.size() > 0) {
+              CefRefPtr<CommandCallback> callback = new EditCommandCallback(g_handler->GetBrowser(), commandId);
+              g_handler->SendJSCommand(g_handler->GetBrowser(), commandId, callback);
+          }
       }
       break;
     }
@@ -509,6 +783,10 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam,
 
     case WM_CLOSE:
       if (g_handler.get()) {
+
+        HWND hWnd = GetActiveWindow();
+        SaveWindowRect(hWnd);
+
         // If we already initiated the browser closing, then let default window proc handle it.
         HWND browserHwnd = g_handler->GetBrowser()->GetHost()->GetWindowHandle();
         HANDLE closing = GetProp(browserHwnd, CLOSING_PROP);
@@ -527,6 +805,23 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam,
       // The frame window has exited
       PostQuitMessage(0);
       return 0;
+
+    case WM_INITMENUPOPUP:
+        HMENU menu = (HMENU)wParam;
+        int count = GetMenuItemCount(menu);
+        void* menuParent = getMenuParent(g_handler->GetBrowser());
+        for (int i = 0; i < count; i++) {
+            UINT id = GetMenuItemID(menu, i);
+
+            bool enabled = NativeMenuModel::getInstance(menuParent).isMenuItemEnabled(id);
+            UINT flagEnabled = enabled ? MF_ENABLED | MF_BYCOMMAND : MF_DISABLED | MF_BYCOMMAND;
+            EnableMenuItem(menu, id,  flagEnabled);
+
+            bool checked = NativeMenuModel::getInstance(menuParent).isMenuItemChecked(id);
+            UINT flagChecked = checked ? MF_CHECKED | MF_BYCOMMAND : MF_UNCHECKED | MF_BYCOMMAND;
+            CheckMenuItem(menu, id, flagChecked);
+        }
+        break;
     }
 
     return DefWindowProc(hWnd, message, wParam, lParam);
@@ -558,12 +853,63 @@ std::string AppGetWorkingDirectory() {
 }
 
 CefString AppGetCachePath() {
-  // Brackets: Set persistance cache
-  wchar_t dataPath[MAX_PATH];
-  SHGetFolderPath(NULL, CSIDL_APPDATA, NULL, SHGFP_TYPE_CURRENT, dataPath);
-  
-  std::wstring cachePath = dataPath;
-  cachePath +=  L"\\" GROUP_NAME APP_NAME L"\\cef_data";
+  std::wstring cachePath = ClientApp::AppGetSupportDirectory();
+  cachePath +=  L"/cef_data";
 
   return CefString(cachePath);
+}
+
+// Helper function for AppGetProductVersionString. Reads version info from
+// VERSIONINFO and writes it into the passed in std::wstring.
+void GetFileVersionString(std::wstring &retVersion) {
+  DWORD dwSize = 0;
+  BYTE *pVersionInfo = NULL;
+  VS_FIXEDFILEINFO *pFileInfo = NULL;
+  UINT pLenFileInfo = 0;
+
+  HMODULE module = GetModuleHandle(NULL);
+  TCHAR executablePath[MAX_PATH];
+  GetModuleFileName(module, executablePath, MAX_PATH);
+
+  dwSize = GetFileVersionInfoSize(executablePath, NULL);
+  if (dwSize == 0) {
+    return;
+  }
+
+  pVersionInfo = new BYTE[dwSize];
+
+  if (!GetFileVersionInfo(executablePath, 0, dwSize, pVersionInfo)) 	{
+    delete[] pVersionInfo;
+    return;
+  }
+
+  if (!VerQueryValue(pVersionInfo, TEXT("\\"), (LPVOID*) &pFileInfo, &pLenFileInfo)) {
+    delete[] pVersionInfo;
+    return;
+  }
+
+  int major  = (pFileInfo->dwFileVersionMS >> 16) & 0xffff ;
+  int minor  = (pFileInfo->dwFileVersionMS) & 0xffff;
+  int hotfix = (pFileInfo->dwFileVersionLS >> 16) & 0xffff;
+  int other  = (pFileInfo->dwFileVersionLS) & 0xffff;
+
+  delete[] pVersionInfo;
+
+  std::wostringstream versionStream(L"");
+  versionStream << major << L"." << minor << L"." << hotfix << L"." << other; 
+  retVersion = versionStream.str();
+}
+
+CefString AppGetProductVersionString() {
+  std::wstring s(APP_NAME);
+  size_t i = s.find(L" ");
+  while (i != std::wstring::npos) {
+    s.erase(i, 1);
+    i = s.find(L" ");
+  }
+  std::wstring version(L"");
+  GetFileVersionString(version);
+  s.append(L"/");
+  s.append(version);
+  return CefString(s);
 }

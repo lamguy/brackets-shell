@@ -95,6 +95,11 @@ if (!appshell.app) {
     appshell.fs.ERR_NOT_DIRECTORY           = 9;
  
     /**
+     * @constant Specified file already exists.
+     */
+    appshell.fs.ERR_FILE_EXISTS             = 10;
+ 
+    /**
      * Display the OS File Open dialog, allowing the user to select
      * files or directories.
      *
@@ -144,7 +149,35 @@ if (!appshell.app) {
     appshell.fs.readdir = function (path, callback) {
         var resultString = ReadDir(callback, path);
     };
-    
+     
+    /**
+     * Create a new directory.
+     *
+     * @param {string} path The path of the directory to create.
+     * @param {number} mode The permissions for the directory, in numeric format (ie 0777)
+     * @param {function(err)} callback Asynchronous callback function. The callback gets one argument.
+     *
+     * @return None. This is an asynchronous call that sends all return information to the callback.
+     **/
+    native function MakeDir();
+    appshell.fs.makedir = function (path, mode, callback) {
+        MakeDir(callback, path, mode);
+    };
+
+    /**
+     * Rename a file or directory.
+     *
+     * @param {string} oldPath The old name of the file or directory.
+     * @param {string} newPath The new name of the file or directory.
+     * @param {function(err)} callback Asynchronous callback function. The callback gets one argument.
+     *
+     * @return None. This is an asynchronous call that sends all return information to the callback.
+     **/
+    native function Rename();
+    appshell.fs.rename = function(oldPath, newPath, callback) {
+        Rename(callback, oldPath, newPath);
+    };
+ 
     /**
      * Get information for the selected file or directory.
      *
@@ -343,6 +376,187 @@ if (!appshell.app) {
     };
  
     /**
+     * Set menu enabled/checked state.
+     * @param {string} command ID of the menu item.
+     * @param {bool} enabled bool to enable or disable the command
+     * @param {bool} checked bool to set the 'checked' attribute of the menu item.
+     * @param {function(integer)} callback Asynchronous callback function. The callback gets one argument, error code.
+     *        Possible error values:
+     *          NO_ERROR
+     *          ERR_INVALID_PARAMS
+     * @return None. This is an asynchronous call that is not meant to have a return
+     */
+    native function SetMenuItemState();
+    appshell.app.setMenuItemState = function (commandid, enabled, checked, callback) {
+        SetMenuItemState(callback, commandid, enabled, checked);
+    };
+
+    /**
+     * Get menu enabled/checked state. For tests.
+     * @param {string} command ID of the menu item.
+     * @param {function(integer, bool, bool)} callback Asynchronous callback function.
+     *      The callback gets three arguments, error code, enabled, checked.
+     *        Possible error values:
+     *          NO_ERROR
+     *          ERR_INVALID_PARAMS
+     * @return None. This is an asynchronous call that is not meant to have a return
+     */
+    native function GetMenuItemState();
+    appshell.app.getMenuItemState = function (commandid, callback) {
+        GetMenuItemState(callback, commandid);
+    };
+
+    /**
+     * Add a top level menu.
+     * @param {string} title Menu title to display, e.g. "File"
+     * @param {string} id Menu ID, e.g. "file"
+     * @param {string} position Where to put the item; values are "before", "after", "first", "last", and ""
+     * @param {string} relativeId The ID of the menu to which is this relative, for position "before" and "after"
+     * @param {function(integer)} callback Asynchronous callback function. The callback gets one argument, error code.
+     *        Possible error values:
+     *          NO_ERROR
+     *          ERR_INVALID_PARAMS
+     * @return None. This is an asynchronous call that is not meant to have a return
+     */
+    native function AddMenu();
+    appshell.app.addMenu = function (title, id, position, relativeId, callback) {
+        position = position || '';
+        relativeId = relativeId || '';
+        AddMenu(callback, title, id, position, relativeId);
+    };
+
+    /**
+     * Add a menu item.
+     * @param {string} parentId ID of containing menu
+     * @param {string} title Menu title to display, e.g. "Open"
+     * @param {string} id Command ID, e.g. "file.open"
+     * @param {string} key Shortcut, e.g. "Cmd-O"
+     * @param {string} displayStr Shortcut to display in menu. If "", use key.
+     * @param {string} position Where to put the item; values are "before", "after", "first", "last", 
+     *                    "firstInSection", "lastInSection", and ""
+     * @param {string} relativeId The ID of the menu item to which is this relative, for position "before" and "after"
+     * @param {function(integer)} callback Asynchronous callback function. The callback gets one argument, error code.
+     *        Possible error values:
+     *          NO_ERROR
+     *          ERR_INVALID_PARAMS
+     * @return None. This is an asynchronous call that is not meant to have a return
+     *
+     * SPECIAL NOTE ABOUT EDIT MENU ITEMS
+     * The Undo, Redo, Cut, Copy, Paste, and Select All items are handled specially. The JavaScript code
+     * will get the first chance to handle the events. If they are *not* handled by JavaScript, the default
+     * implementation will call those methods on the CEF instance.
+     *
+     * In order for this to work correctly, you MUST use the following ids for these menu item:
+     *   Undo:        "edit.undo"
+     *   Redo:        "edit.redo"
+     *   Cut:         "edit.cut"
+     *   Copy:        "edit.copy"
+     *   Paste:       "edit.paste"
+     *   Select All:  "edit.selectAll"
+     */
+    native function AddMenuItem();
+    appshell.app.addMenuItem = function (parentId, title, id, key, displayStr, position, relativeId, callback) {
+        key = key || '';
+        position = position || '';
+        relativeId = relativeId || '';
+        AddMenuItem(callback, parentId, title, id, key, displayStr, position, relativeId);
+    };
+
+    /**
+     * Change the title of a menu or menu item.
+     * @param {string} commandid Menu/Command ID, e.g. "file" or "file.open"
+     * @param {string} title Menu title to display, e.g. "File" or "Open"
+     * @param {function(integer)} callback Asynchronous callback function. The callback gets one argument, error code.
+     *        Possible error values:
+     *          NO_ERROR
+     *          ERR_INVALID_PARAMS, ERR_NOT_FOUND, ERR_UNKNOWN
+     * @return None. This is an asynchronous call that is not meant to have a return
+     */
+    native function SetMenuTitle();
+    appshell.app.setMenuTitle = function (commandid, title, callback) {
+        SetMenuTitle(callback, commandid, title);
+    };
+ 
+    /**
+     * Get menu title. For tests.
+     * @param {string} commandid ID of the menu item.
+     * @param {function(integer, string)} callback Asynchronous callback function.
+     *      The callback gets two arguments, error code, title.
+     *        Possible error values:
+     *          NO_ERROR
+     *          ERR_INVALID_PARAMS
+     * @return None. This is an asynchronous call that is not meant to have a return
+     */
+    native function GetMenuTitle();
+    appshell.app.getMenuTitle = function (commandid, callback) {
+        GetMenuTitle(callback, commandid);
+    };
+
+    /**
+     * Set menu item shortuct. 
+     * @param {string} commandId ID of the menu item.
+     * @param {string} shortcut Shortcut string, like "Cmd-U".
+     * @param {string} displayStr String to display in menu. If "", use shortcut.
+     * @param {function (err)} callback Asynchronous callback function. The callback gets an error code.
+     * @return None. This is an asynchronous call that sends all return information to the callback.
+     */
+    native function SetMenuItemShortcut();
+    appshell.app.setMenuItemShortcut = function (commandId, shortcut, displayStr, callback) {
+        SetMenuItemShortcut(callback, commandId, shortcut, displayStr);
+    };
+ 
+    /**
+     * Remove menu associated with commandId.
+     * @param {string} commandid ID of the menu item.
+     * @param {function(err)} callback Asynchronous callback function. The callback gets an error code.
+     *        Possible error values:
+     *          NO_ERROR
+     *          ERR_INVALID_PARAMS
+     *          ERR_NOT_FOUND
+     *                 
+     * @return None. This is an asynchronous call that sends all return information to the callback.
+     */
+    native function RemoveMenu();
+    appshell.app.removeMenu = function (commandId, callback) {
+        RemoveMenu(callback, commandId);
+    };
+
+    /**
+     * Remove menuitem associated with commandId.
+     * @param {string} commandid ID of the menu item.
+     * @param {function(err)} callback Asynchronous callback function. The callback gets an error code.
+     *        Possible error values:
+     *          NO_ERROR
+     *          ERR_INVALID_PARAMS
+     *          ERR_NOT_FOUND
+     *                 
+     * @return None. This is an asynchronous call that sends all return information to the callback.
+     */
+    native function RemoveMenuItem();
+    appshell.app.removeMenuItem = function (commandId, callback) {
+        RemoveMenuItem(callback, commandId);
+    };
+ 
+    /**
+     * Get the position of the menu or menu item associated with commandId.
+     * @param {string} command ID of the menu or menu item.
+     * @param {function(err, parentId, index)} callback Asynchronous callback function. The callback gets an error code,
+     *     the ID of the immediate parent and the index of the menu or menu item. If the command is a top level menu,
+     *     it does not have a parent and parentId will be NULL. The returned index will be -1 if the command is not found.
+     *     In those not-found cases, the error value will also be ERR_NOT_FOUND.
+     *        Possible error values:
+     *          NO_ERROR
+     *          ERR_INVALID_PARAMS
+     *          ERR_NOT_FOUND
+     *                 
+     * @return None. This is an asynchronous call that sends all return information to the callback.
+     */
+    native function GetMenuPosition();
+    appshell.app.getMenuPosition = function (commandId, callback) {
+        GetMenuPosition(callback, commandId);
+    };
+ 
+    /**
      * Return the user's language per operating system preferences.
      */
     native function GetCurrentLanguage();
@@ -354,16 +568,40 @@ if (!appshell.app) {
     });
  
     /**
+     * Returns the full path of the application support directory.
+     * On the Mac, it's /Users/<user>/Library/Application Support[/GROUP_NAME]/APP_NAME
+     * On Windows, it's C:\Users\<user>\AppData\Roaming[\GROUP_NAME]\APP_NAME
+     *
+     * @return {string} Full path of the application support directory
+     */
+    native function GetApplicationSupportDirectory();
+    appshell.app.getApplicationSupportDirectory = function () {
+        return GetApplicationSupportDirectory();
+    }
+  
+    /**
+     * Open the specified folder in an OS file window.
+     *
+     * @param {string} path Path of the folder to show.
+     * @param {function(err)} callback Asyncrhonous callback function with one argument (the error)
+     *
+     * @return None. This is an asynchronous call that sends all return information to the callback.
+     */
+    native function ShowOSFolder();
+    appshell.app.showOSFolder = function (path, callback) {
+        ShowOSFolder(callback, path);
+    }
+ 
+    /**
      * Open the extensions folder in an OS file window.
      *
-     * @param {string} appURL URL of the index.html file for the application
+     * @param {string} appURL Not used
      * @param {function(err)} callback Asynchronous callback function with one argument (the error)
      *
      * @return None. This is an asynchronous call that sends all return information to the callback.
      */
-    native function ShowExtensionsFolder();
     appshell.app.showExtensionsFolder = function (appURL, callback) {
-        ShowExtensionsFolder(callback, appURL);
+        appshell.app.showOSFolder(GetApplicationSupportDirectory() + "/extensions", callback);
     };
  
     // Alias the appshell object to brackets. This is temporary and should be removed.

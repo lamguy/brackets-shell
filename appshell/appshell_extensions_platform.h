@@ -42,11 +42,20 @@ static const int ERR_CANT_WRITE             = 6;
 static const int ERR_OUT_OF_SPACE           = 7;
 static const int ERR_NOT_FILE               = 8;
 static const int ERR_NOT_DIRECTORY          = 9;
+static const int ERR_FILE_EXISTS            = 10;
 
 #if defined(OS_WIN)
 typedef std::wstring ExtensionString;
+inline void* getMenuParent(CefRefPtr<CefBrowser>browser) {
+    if (browser.get() && browser->GetHost()) {
+        HWND frameHwnd = browser->GetHost()->GetWindowHandle();
+        return (browser->IsPopup()) ? frameHwnd : GetParent(frameHwnd);
+    }
+    return NULL;
+}
 #else
 typedef std::string ExtensionString;
+inline void* getMenuParent(CefRefPtr<CefBrowser>browser) {return NULL;} // Mac uses a shared menu bar
 #endif
 
 
@@ -67,6 +76,10 @@ int32 ShowOpenDialog(bool allowMulitpleSelection,
 
 int32 ReadDir(ExtensionString path, CefRefPtr<CefListValue>& directoryContents);
 
+int32 MakeDir(ExtensionString path, int32 mode);
+
+int32 Rename(ExtensionString oldName, ExtensionString newName);
+
 int32 GetFileModificationTime(ExtensionString filename, uint32& modtime, bool& isDir);
 
 int32 ReadFile(ExtensionString filename, ExtensionString encoding, std::string& contents);
@@ -84,3 +97,24 @@ void CloseWindow(CefRefPtr<CefBrowser> browser);
 void BringBrowserWindowToFront(CefRefPtr<CefBrowser> browser);
 
 int32 ShowFolderInOSWindow(ExtensionString pathname);
+
+int32 AddMenu(CefRefPtr<CefBrowser> browser, ExtensionString title, ExtensionString command,
+              ExtensionString position, ExtensionString relativeId);
+
+int32 AddMenuItem(CefRefPtr<CefBrowser> browser, ExtensionString parentCommand, ExtensionString itemTitle,
+                  ExtensionString command, ExtensionString key, ExtensionString displayStr,
+                  ExtensionString position, ExtensionString relativeId);
+
+int32 RemoveMenu(CefRefPtr<CefBrowser> browser, const ExtensionString& commandId);
+
+int32 RemoveMenuItem(CefRefPtr<CefBrowser> browser, const ExtensionString& commandId);
+
+int32 GetMenuItemState(CefRefPtr<CefBrowser> browser, ExtensionString commandId, bool& enabled, bool& checked, int& index);
+
+int32 SetMenuTitle(CefRefPtr<CefBrowser> browser, ExtensionString commandId, ExtensionString menuTitle);
+
+int32 GetMenuTitle(CefRefPtr<CefBrowser> browser, ExtensionString commandId, ExtensionString& menuTitle);
+
+int32 SetMenuItemShortcut(CefRefPtr<CefBrowser> browser, ExtensionString commandId, ExtensionString shortcut, ExtensionString displayStr);
+
+int32 GetMenuPosition(CefRefPtr<CefBrowser> browser, const ExtensionString& commandId, ExtensionString& parentId, int& index);

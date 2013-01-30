@@ -23,6 +23,7 @@
 
 #include "client_app.h"
 #include "include/cef_base.h"
+#include "config.h"
 #include <Cocoa/Cocoa.h>
 
 #include <string>
@@ -49,17 +50,6 @@ CefString ClientApp::GetCurrentLanguage()
     // NSLog(@"%@", language);
   
     NSString* language = [[NSLocale preferredLanguages] objectAtIndex:0];
-    
-    // Remap zh-Hans --> zh-CN and zh-Hant --> zh-TW so that CEF3 can find the corresponding localized resources.
-    // We may need to remove these two lines in the future if CEF3 switches to the newer locale names.
-    language = [language stringByReplacingOccurrencesOfString:@"Hans" withString:@"CN"];
-    language = [language stringByReplacingOccurrencesOfString:@"Hant" withString:@"TW"];
-    
-    // Remap pt --> pt-BR so that we can load the CEF3 resource for Brazilian Portuguese.
-    // [rlim] I believe this is the last one that we have to remap. If we find any to reamp again,
-    // then we should just switch to CFLocaleCopyPreferredLanguages() instead of [[NSLocale preferredLanguages].
-    if ([language isEqualToString:@"pt"])
-         language = [language stringByReplacingOccurrencesOfString:@"pt" withString:@"pt-BR"];
     
     CefString result = [language UTF8String];
     return result;
@@ -92,3 +82,12 @@ std::string ClientApp::GetExtensionJSSource()
     
     return result;
 }
+
+
+CefString ClientApp::AppGetSupportDirectory() {
+  NSString *libraryDirectory = [NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES) objectAtIndex:0];
+  NSString *supportDirectory = [NSString stringWithFormat:@"%@/%@%@", libraryDirectory, GROUP_NAME, APP_NAME];
+  
+  return CefString([supportDirectory UTF8String]);
+}
+
